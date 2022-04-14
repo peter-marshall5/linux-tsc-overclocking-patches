@@ -1,0 +1,89 @@
+--- a/arch/x86/kernel/tsc.c	2022-03-13 16:23:37.000000000 -0400
++++ b/arch/x86/kernel/tsc.c	2022-04-14 15:52:12.902468580 -0400
+@@ -42,6 +42,7 @@
+  * TSC can be unstable due to cpufreq or due to unsynced TSCs
+  */
+ static int __read_mostly tsc_unstable;
++static int __read_mostly tsc_manual;
+ static unsigned int __initdata tsc_early_khz;
+ 
+ static DEFINE_STATIC_KEY_FALSE(__use_tsc);
+@@ -1375,8 +1376,12 @@
+ 		freq = calc_pmtimer_ref(delta, ref_start, ref_stop);
+ 
+ 	/* Make sure we're within 1% */
+-	if (abs(tsc_khz - freq) > tsc_khz/100)
+-		goto out;
++	
++	/* Don't bother refining TSC on unstable systems */
++	if (!tsc_manual) {
++		if (abs(tsc_khz - freq) > tsc_khz/100)
++			goto out;
++	}
+ 
+ 	tsc_khz = freq;
+ 	pr_info("Refined TSC clocksource calibration: %lu.%03lu MHz\n",
+@@ -1402,8 +1407,39 @@
+ }
+ 
+ 
++/*
++ * Implement a way to recalibrate the TSC frequency
++ * Useful for software overclocking
++ */
++static ssize_t tsc_recal_show(struct kobject *kobj,
++                                 struct kobj_attribute *attr, char *buf) {
++	ssize_t r;
++	r = sprintf(buf, "%d\n", tsc_khz);
++
++	/* Don't bother refining TSC on unstable systems */
++	if (!tsc_unstable && !tsc_manual) {
++		tsc_manual = 1;
++		schedule_delayed_work(&tsc_irqwork, HZ * 10);
++	}
++	return r;
++}
++
++static ssize_t tsc_recal_store(struct kobject *kobj,
++                                  struct kobj_attribute *attr, const char *buf,
++                                  size_t count) {
++	return count;
++}
++
++static struct kobj_attribute tsc_refine_attribute =
++    __ATTR(tsc_refine_khz,
++           S_IRUGO, // world readable, unchangeable
++           tsc_recal_show, tsc_recal_store);
++
+ static int __init init_tsc_clocksource(void)
+ {
++	struct device *dev;
++	int error = -ENOENT;
++
+ 	if (!boot_cpu_has(X86_FEATURE_TSC) || !tsc_khz)
+ 		return 0;
+ 
+@@ -1426,9 +1462,22 @@
+ 		return 0;
+ 	}
+ 
+-	schedule_delayed_work(&tsc_irqwork, 0);
++	dev = get_cpu_device(0);
++	if (!dev) {
++		pr_info("could not get device for CPU %d\n", 0);
++	} else {
++		error = sysfs_create_file(&dev->kobj, &tsc_refine_attribute.attr);
++		if (error) {
++			pr_info("could not register with sysfs (%d)\n",
++				error);
++		}
++	}
++
++	// 10 second delay
++	//schedule_delayed_work(&tsc_irqwork, HZ * 10);
+ 	return 0;
+ }
++
+ /*
+  * We use device_initcall here, to ensure we run after the hpet
+  * is fully initialized, which may occur at fs_initcall time.

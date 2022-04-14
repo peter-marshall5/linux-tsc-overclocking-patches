@@ -1,0 +1,37 @@
+--- a/arch/x86/kernel/tsc.c	2022-03-13 16:23:37.000000000 -0400
++++ b/arch/x86/kernel/tsc.c	2022-04-08 12:55:16.680724048 -0400
+@@ -1507,8 +1507,20 @@
+ 	tsc_enable_sched_clock();
+ }
+
++
++unsigned long tsc_khz_specified;
++static int __init tsc_khz_specified_setup(char *str)
++{
++ tsc_khz_specified = simple_strtoul(str, NULL, 0);
++ return 1;
++}
++
++
++__setup("tsc_khz=", tsc_khz_specified_setup);
++
+ void __init tsc_init(void)
+ {
++
+ 	/*
+ 	 * native_calibrate_cpu_early can only calibrate using methods that are
+ 	 * available early in boot.
+@@ -1521,6 +1533,13 @@
+ 		return;
+ 	}
+
++	if (tsc_khz_specified > 1000) {
++                pr_info("Using user defined TSC freq: %lu.%03lu MHz\n",
++                        tsc_khz_specified/1000,
++                        tsc_khz_specified%1000);
++                tsc_khz = tsc_khz_specified;
++	}
++
+ 	if (!tsc_khz) {
+ 		/* We failed to determine frequencies earlier, try again */
+ 		if (!determine_cpu_tsc_frequencies(false)) {
